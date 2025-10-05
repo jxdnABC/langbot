@@ -5,10 +5,11 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# 安装网络工具用于调试
+# 安装必要工具并创建数据目录
 RUN apt-get update && \
-    apt-get install -y net-tools netcat-openbsd && \
-    rm -rf /var/lib/apt/lists/*
+    apt-get install -y net-tools netcat-openbsd procps && \
+    rm -rf /var/lib/apt/lists/* && \
+    mkdir -p /app/data /app/plugins
 
 COPY start.sh /app/start.sh
 RUN chmod +x /app/start.sh
