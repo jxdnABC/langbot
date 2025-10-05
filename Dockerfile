@@ -8,6 +8,11 @@ RUN mkdir -p /app/data /app/plugins
 COPY start.sh /app/start.sh
 RUN chmod +x /app/start.sh
 
+# 安装 langbot 及其依赖
+RUN uv pip install langbot langbot-plugin || \
+    pip install langbot langbot-plugin || \
+    echo "Warning: Failed to install packages"
+
 # 默认环境变量（Render 控制台可覆盖）
 ENV PORT=5300
 ENV PLUGIN_RUNTIME_URL=ws://127.0.0.1:5401/control/ws
