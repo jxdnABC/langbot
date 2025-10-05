@@ -1,19 +1,26 @@
-#!/bin/bash
-set -e
+FROM rockchin/langbot:latest
 
-echo "🔍 Checking Python environment..."
-which python3
-python3 --version
-uv --version || echo "uv not found"
+ENV TZ=Asia/Shanghai
 
-echo "🔍 Checking installed packages..."
-uv pip list || pip list
+WORKDIR /app
+RUN mkdir -p /app/data /app/plugins
 
-echo "🧠 Starting LangBot Plugin Runtime..."
-nohup uv run -m langbot_plugin.cli.__init__ rt --port 5401 > /app/data/plugin.log 2>&1 &
+COPY start.sh /app/start.sh
+RUN chmod +x /app/start.sh
 
-# 等待插件运行时启动
-sleep 3
+# 安装 langbot 及其依赖
+RUN uv pip install langbot langbot-plugin || \
+    pip install langbot langbot-plugin || \
+    echo "Warning: Failed to install packages"
 
-echo "🤖 Starting LangBot main service..."
-exec uv run -m langbot --port ${PORT:-5300}
+# 默认环境变量（Render 控制台可覆盖）
+ENV PORT=5300
+ENV PLUGIN_RUNTIME_URL=ws://127.0.0.1:5401/control/ws
+ENV LANGBOT_DB_TYPE=sqlite
+ENV LANGBOT_DB_PATH=/app/data/langbot.db
+ENV LANGBOT_DEBUG=true
+
+EXPOSE 5300
+EXPOSE 5401
+
+CMD ["/bin/bash", "/app/start.sh"]
