@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: langbot
+    env: docker
+    plan: starter
+    autoDeploy: true
+    dockerfilePath: ./Dockerfile
+    disk:
+      name: langbot_data
+      mountPath: /app/data
+      sizeGB: 2
+    envVars:
+      - key: TZ
+        value: Asia/Shanghai
+      - key: PORT
+        value: 5300
+     # - key: LANGBOT_DB_TYPE
+     #   value: postgresql
+     # - key: LANGBOT_DB_HOST
+     #   value: your-db-host.render.com
+      - key: LANGBOT_DB_PORT
+        value: 5432
+      - key: LANGBOT_DB_USER
+        value: langbot
+      - key: LANGBOT_DB_PASSWORD
+        sync: false   # 在 Render 控制台设置
+      - key: LANGBOT_DB_NAME
+        value: langbot
+      - key: PLUGIN_RUNTIME_URL
+        value: ws://127.0.0.1:5401/control/ws
