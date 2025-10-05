@@ -12,24 +12,13 @@ echo ""
 echo "Step 1: Starting Plugin Runtime on port 5401..."
 nohup uv run -m langbot_plugin.cli.__init__ rt --port 5401 > /app/data/plugin_runtime.log 2>&1 &
 PLUGIN_PID=$!
-
 echo "Plugin Runtime PID: $PLUGIN_PID"
 sleep 3
 
-# 检查 Plugin Runtime 是否启动
-if ps -p $PLUGIN_PID > /dev/null 2>&1; then
-    echo "Plugin Runtime is running"
-else
-    echo "Plugin Runtime may have issues, checking logs..."
-    tail -20 /app/data/plugin_runtime.log 2>/dev/null || echo "No logs"
-fi
-
 echo ""
-echo "Step 2: Configuring LangBot to use local Plugin Runtime..."
-
-# 等待配置文件生成
+echo "Step 2: Generating initial config if needed..."
 if [ ! -f /app/data/config.yaml ]; then
-    echo "First run detected, initializing config..."
+    echo "First run - generating config..."
     timeout 10 uv run python3 main.py &
     INIT_PID=$!
     sleep 8
@@ -37,25 +26,42 @@ if [ ! -f /app/data/config.yaml ]; then
     sleep 2
 fi
 
-# 修改配置文件中的 plugin runtime 地址
+echo ""
+echo "Step 3: Checking and modifying config.yaml..."
 if [ -f /app/data/config.yaml ]; then
-    echo "Updating plugin runtime URL in config..."
+    echo "Current config.yaml content:"
+    cat /app/data/config.yaml
+    echo ""
+    echo "---"
     
-    # 备份配置
+    # 备份
     cp /app/data/config.yaml /app/data/config.yaml.bak
     
-    # 修改或添加 plugin runtime 配置
-    if grep -q "plugin_runtime_url:" /app/data/config.yaml; then
-        sed -i 's|plugin_runtime_url:.*|plugin_runtime_url: ws://127.0.0.1:5401/control/ws|' /app/data/config.yaml
-    else
-        echo "" >> /app/data/config.yaml
-        echo "plugin_runtime_url: ws://127.0.0.1:5401/control/ws" >> /app/data/config.yaml
-    fi
+    # 查找所有可能的 plugin runtime 相关配置
+    echo "Searching for plugin runtime config..."
+    grep -i "plugin" /app/data/config.yaml || echo "No 'plugin' found"
+    grep -i "runtime" /app/data/config.yaml || echo "No 'runtime' found"
+    grep -i "5400" /app/data/config.yaml || echo "No '5400' found"
+    grep -i "langbot_plugin_runtime" /app/data/config.yaml || echo "No 'langbot_plugin_runtime' found"
     
-    echo "Config updated:"
-    grep -A 2 "plugin_runtime" /app/data/config.yaml || echo "plugin_runtime_url: ws://127.0.0.1:5401/control/ws"
+    echo ""
+    echo "Attempting to fix config..."
+    
+    # 替换所有可能的旧地址
+    sed -i 's|ws://langbot_plugin_runtime:5400/control/ws|ws://127.0.0.1:5401/control/ws|g' /app/data/config.yaml
+    sed -i 's|langbot_plugin_runtime:5400|127.0.0.1:5401|g' /app/data/config.yaml
+    sed -i 's|:5400|:5401|g' /app/data/config.yaml
+    
+    echo ""
+    echo "Modified config.yaml:"
+    cat /app/data/config.yaml
+    
+else
+    echo "WARNING: config.yaml not found at /app/data/config.yaml"
+    echo "Checking other locations..."
+    find /app -name "config.yaml" -o -name "config.yml" 2>/dev/null || echo "No config files found"
 fi
 
 echo ""
-echo "Step 3: Starting LangBot main service..."
+echo "Step 4: Starting LangBot..."
 exec uv run python3 main.py
