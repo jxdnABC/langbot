@@ -1,41 +1,42 @@
 #!/bin/bash
 set -e
 
-echo "====== Plugin Runtime 调试 ======"
+echo "======================================"
+echo "🚀 Starting LangBot with Plugin Runtime"
+echo "======================================"
+
+# 配置 Plugin Runtime 连接地址
+export PLUGIN_RUNTIME_URL="ws://127.0.0.1:5401/control/ws"
 
 echo ""
-echo "1. 查找 plugin 相关的可执行文件:"
-find /app/.venv/bin -name "*plugin*" -type f 2>/dev/null || echo "None"
+echo "🧠 Starting Plugin Runtime on port 5401..."
+
+# 使用 uv run 在虚拟环境中运行
+cd /app
+nohup uv run python3 -m langbot_plugin.cli rt --port 5401 > /app/data/plugin_runtime.log 2>&1 &
+PLUGIN_PID=$!
+echo "   Plugin Runtime PID: $PLUGIN_PID"
+
+# 等待启动
+echo "   Waiting for Plugin Runtime..."
+sleep 5
+
+# 检查是否启动成功
+if ps -p $PLUGIN_PID > /dev/null; then
+    echo "   ✅ Plugin Runtime process is running"
+    
+    # 检查端口
+    if netstat -tln 2>/dev/null | grep -q ":5401 "; then
+        echo "   ✅ Plugin Runtime is listening on port 5401"
+    else
+        echo "   ⚠️  Port 5401 not yet bound, checking logs..."
+        tail -20 /app/data/plugin_runtime.log
+    fi
+else
+    echo "   ❌ Plugin Runtime process died, checking logs..."
+    cat /app/data/plugin_runtime.log
+fi
 
 echo ""
-echo "2. 查找 plugin 相关的 Python 模块:"
-find /app/.venv/lib -name "*plugin*" -type d 2>/dev/null | head -10
-
-echo ""
-echo "3. 已安装的 plugin 包:"
-uv pip list | grep -i plugin
-
-echo ""
-echo "4. 尝试导入 langbot_plugin:"
-python3 -c "import langbot_plugin; print('Location:', langbot_plugin.__file__); print('Contents:', dir(langbot_plugin))" 2>&1 || echo "Failed"
-
-echo ""
-echo "5. 查看 langbot_plugin 的 cli 模块:"
-python3 -c "from langbot_plugin import cli; print(dir(cli))" 2>&1 || echo "No cli module"
-
-echo ""
-echo "6. 尝试运行 plugin runtime:"
-echo "   Trying: uv run langbot-plugin rt --port 5401"
-timeout 5 uv run langbot-plugin rt --port 5401 2>&1 || echo "Failed"
-
-echo ""
-echo "   Trying: uv run -m langbot_plugin.cli rt --port 5401"
-timeout 5 uv run -m langbot_plugin.cli rt --port 5401 2>&1 || echo "Failed"
-
-echo ""
-echo "   Trying: python3 -m langbot_plugin rt --port 5401"
-timeout 5 python3 -m langbot_plugin rt --port 5401 2>&1 || echo "Failed"
-
-echo ""
-echo "====== 保持运行 60 秒以查看日志 ======"
-sleep 60
+echo "🤖 Starting LangBot main service..."
+exec uv run python3 main.py
