@@ -1,13 +1,10 @@
 #!/bin/bash
 set -e
 
-echo "🔍 Checking installation..."
-python3 -c "import langbot; print(f'LangBot version: {langbot.__version__}')" || echo "LangBot check failed"
+echo "🚀 Starting LangBot..."
+echo "Port: ${PORT}"
 
-echo "🧠 Starting LangBot Plugin Runtime..."
-nohup python3 -m langbot_plugin.cli rt --port 5401 > /app/data/plugin.log 2>&1 &
-
-sleep 2
-
-echo "🤖 Starting LangBot main service on port ${PORT}..."
-exec python3 -m langbot.cli --port ${PORT:-5300}
+# 直接运行 LangBot 主程序
+# 官方镜像已经配置好了所有东西
+cd /LangBot
+exec python3 main.py --port ${PORT:-5300}
