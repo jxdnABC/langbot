@@ -1,19 +1,18 @@
-FROM rockchin/langbot:latest
+FROM python:3.11-slim
 
 ENV TZ=Asia/Shanghai
+ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 RUN mkdir -p /app/data /app/plugins
 
+# 先安装依赖（构建时完成，不会超时）
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir langbot langbot-plugin
+
 COPY start.sh /app/start.sh
 RUN chmod +x /app/start.sh
 
-# 安装 langbot 及其依赖
-RUN uv pip install langbot langbot-plugin || \
-    pip install langbot langbot-plugin || \
-    echo "Warning: Failed to install packages"
-
-# 默认环境变量（Render 控制台可覆盖）
 ENV PORT=5300
 ENV PLUGIN_RUNTIME_URL=ws://127.0.0.1:5401/control/ws
 ENV LANGBOT_DB_TYPE=sqlite
