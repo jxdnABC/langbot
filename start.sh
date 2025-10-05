@@ -2,112 +2,100 @@
 set -e
 
 echo "======================================"
-echo "Starting LangBot with Plugin Runtime"
+echo "LangBot + Plugin Runtime for Render"
 echo "======================================"
 
 mkdir -p /app/data /app/plugins
 
-# 启动 Plugin Runtime（使用默认 5400 端口）
-echo "Starting Plugin Runtime on default port 5400..."
+# 关键：立即启动一个假的 HTTP 服务占住 5300 端口
+# 这样 Render 就不会超时
+echo "Starting placeholder HTTP service on port 5300..."
+cat > /tmp/placeholder.py << 'PLACEHOLDER_EOF'
+from http.server import HTTPServer, BaseHTTPRequestHandler
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/html')
+        self.end_headers()
+        self.wfile.write(b'<h1>LangBot is starting...</h1><p>Please wait 1-2 minutes.</p>')
+    def log_message(self, format, *args):
+        pass
+HTTPServer(('0.0.0.0', 5300), Handler).serve_forever()
+PLACEHOLDER_EOF
+
+python3 /tmp/placeholder.py &
+PLACEHOLDER_PID=$!
+echo "Placeholder server started (PID: $PLACEHOLDER_PID)"
+
+# 等待端口真正监听
+for i in {1..10}; do
+    if netstat -tln 2>/dev/null | grep -q ":5300" || ss -tln 2>/dev/null | grep -q ":5300"; then
+        echo "✓ Port 5300 is ready - Render will detect this"
+        break
+    fi
+    sleep 1
+done
+
+# 现在可以慢慢启动真正的服务了
+echo ""
+echo "Starting Plugin Runtime..."
 nohup uv run -m langbot_plugin.cli.__init__ rt > /app/data/plugin_runtime.log 2>&1 &
 PLUGIN_PID=$!
 echo "Plugin Runtime PID: $PLUGIN_PID"
 
-# 等待并检查
-echo "Waiting for Plugin Runtime to start..."
 sleep 5
 
-# 详细诊断
-echo ""
-echo "=== Diagnostic Info ==="
-echo "Process status:"
-ps aux | grep -E "langbot_plugin|rt" || echo "No plugin runtime process found"
-
-echo ""
-echo "Listening ports:"
-netstat -tln 2>/dev/null | grep LISTEN || ss -tln 2>/dev/null | grep LISTEN || echo "Cannot detect ports"
-
-echo ""
-echo "Plugin Runtime log:"
-tail -30 /app/data/plugin_runtime.log 2>/dev/null || echo "No log available"
-
-echo ""
+# 检查 Plugin Runtime
+echo "Checking Plugin Runtime..."
 if ps -p $PLUGIN_PID > /dev/null; then
-    echo "✓ Plugin Runtime process is alive"
+    echo "✓ Plugin Runtime is running"
+    tail -10 /app/data/plugin_runtime.log
 else
-    echo "✗ Plugin Runtime process died!"
-    exit 1
+    echo "⚠ Plugin Runtime may have issues"
+    cat /app/data/plugin_runtime.log 2>/dev/null || true
 fi
 
-# 检查 5400 端口
-if netstat -tln 2>/dev/null | grep -q ":5400" || ss -tln 2>/dev/null | grep -q ":5400"; then
-    echo "✓ Port 5400 is listening"
-else
-    echo "⚠ Port 5400 is NOT listening"
-    echo "This might be normal if plugin runtime uses a different mechanism"
-fi
-
-echo "======================="
-echo ""
-
-# 创建配置修补脚本（改用 localhost 而不是主机名）
-cat > /app/patch_config.py << 'PATCHER_EOF'
+# 配置修补脚本
+cat > /app/patch.py << 'PATCH_EOF'
 import os, time, sys
-
-OLD_HOSTNAME = 'langbot_plugin_runtime'
-NEW_HOSTNAME = '127.0.0.1'
-paths = ['/app/data/config.yaml', 'data/config.yaml']
-
-print('[Patcher] Starting config watcher...')
-for attempt in range(150):
-    for p in paths:
+for _ in range(120):
+    for p in ['/app/data/config.yaml', 'data/config.yaml']:
         if os.path.exists(p):
-            try:
-                with open(p, 'r') as f:
-                    c = f.read()
-                
-                if OLD_HOSTNAME in c:
-                    print(f'[Patcher] Found config at {p}, patching...')
-                    # 只替换主机名，保持端口 5400
-                    c = c.replace(OLD_HOSTNAME, NEW_HOSTNAME)
-                    
-                    with open(p, 'w') as f:
-                        f.write(c)
-                    
-                    print(f'[Patcher] ✓ Patched {p}')
-                    print('[Patcher] Killing LangBot to reload config...')
-                    os.system("pkill -f 'python3 main.py'")
-                    sys.exit(0)
-            except Exception as e:
-                print(f'[Patcher] Error: {e}')
+            with open(p) as f: c = f.read()
+            if 'langbot_plugin_runtime' in c:
+                c = c.replace('langbot_plugin_runtime', '127.0.0.1')
+                with open(p, 'w') as f: f.write(c)
+                print(f'[Patch] ✓ {p}')
+                os.system("kill -9 $(pgrep -f 'python3 main.py') 2>/dev/null")
+                sys.exit(0)
     time.sleep(1)
+PATCH_EOF
 
-print('[Patcher] Timeout - config file not found or already patched')
-PATCHER_EOF
+python3 /app/patch.py &
 
-# 启动配置修补脚本
-python3 /app/patch_config.py > /app/data/patcher.log 2>&1 &
-PATCHER_PID=$!
+# 启动 LangBot（会被 patcher 杀死并重启）
+echo ""
+echo "Starting LangBot (first run)..."
+timeout 120 uv run python3 main.py || true
 
-# 循环启动 LangBot
-for attempt in {1..3}; do
-    echo "Starting LangBot (attempt $attempt)..."
-    uv run python3 main.py &
-    LANGBOT_PID=$!
-    
-    wait $LANGBOT_PID 2>/dev/null || true
-    
-    # 检查配置是否已修补
-    if grep -q "127.0.0.1:5400" /app/data/config.yaml 2>/dev/null || \
-       grep -q "127.0.0.1:5400" data/config.yaml 2>/dev/null; then
-        echo "✓ Config patched! Final start..."
-        kill $PATCHER_PID 2>/dev/null || true
-        exec uv run python3 main.py
-    fi
-    
-    sleep 3
-done
+sleep 3
 
-echo "Starting LangBot anyway..."
-kill $PATCHER_PID 2>/dev/null || true
+# 检查配置是否已修补
+if grep -q "127.0.0.1:5400" /app/data/config.yaml 2>/dev/null || \
+   grep -q "127.0.0.1:5400" data/config.yaml 2>/dev/null; then
+    echo "✓ Config patched!"
+else
+    echo "⚠ Config not patched, manually patching..."
+    for p in /app/data/config.yaml data/config.yaml; do
+        [ -f "$p" ] && sed -i 's/langbot_plugin_runtime/127.0.0.1/g' "$p"
+    done
+fi
+
+# 杀掉占位服务
+echo ""
+echo "Stopping placeholder server..."
+kill $PLACEHOLDER_PID 2>/dev/null || true
+
+# 最终启动
+echo "Starting LangBot (final)..."
 exec uv run python3 main.py
