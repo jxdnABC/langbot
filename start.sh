@@ -13,59 +13,67 @@ nohup uv run -m langbot_plugin.cli.__init__ rt --port 5401 > /app/data/plugin_ru
 PLUGIN_PID=$!
 echo "Plugin Runtime PID: $PLUGIN_PID"
 
-# 等待 Plugin Runtime 完全启动
-echo "Waiting for Plugin Runtime to be ready..."
-for i in {1..30}; do
-    if netstat -tln 2>/dev/null | grep -q ":5401" || ss -tln 2>/dev/null | grep -q ":5401"; then
-        echo "✓ Plugin Runtime is listening on port 5401"
-        break
+sleep 5
+
+if ps -p $PLUGIN_PID > /dev/null; then
+    echo "✓ Plugin Runtime is running"
+else
+    echo "✗ Plugin Runtime failed!"
+    cat /app/data/plugin_runtime.log 2>/dev/null || true
+    exit 1
+fi
+
+# Step 2: 启动配置监控和修补脚本（后台）
+cat > /app/patch_config.py << 'PATCHER_EOF'
+import os, time, sys
+OLD = 'ws://langbot_plugin_runtime:5400/control/ws'
+NEW = 'ws://127.0.0.1:5401/control/ws'
+paths = ['/app/data/config.yaml', 'data/config.yaml']
+
+print('[Patcher] Starting...')
+for _ in range(150):
+    for p in paths:
+        if os.path.exists(p):
+            try:
+                with open(p, 'r') as f: c = f.read()
+                if OLD in c or 'langbot_plugin_runtime' in c:
+                    c = c.replace(OLD, NEW).replace('langbot_plugin_runtime:5400', '127.0.0.1:5401')
+                    with open(p, 'w') as f: f.write(c)
+                    print(f'[Patcher] ✓ Patched {p}')
+                    # 杀死 LangBot 让它重启
+                    os.system("pkill -f 'python3 main.py'")
+                    sys.exit(0)
+            except: pass
+    time.sleep(1)
+print('[Patcher] Timeout')
+PATCHER_EOF
+
+python3 /app/patch_config.py > /app/data/patcher.log 2>&1 &
+PATCHER_PID=$!
+echo "Config patcher started (PID: $PATCHER_PID)"
+
+# Step 3: 循环启动 LangBot
+attempt=0
+while [ $attempt -lt 3 ]; do
+    echo ""
+    echo "Starting LangBot (attempt $((attempt + 1)))..."
+    uv run python3 main.py &
+    LANGBOT_PID=$!
+    
+    # 等待进程结束或被杀死
+    wait $LANGBOT_PID 2>/dev/null || true
+    
+    # 检查配置是否已被修改
+    if grep -q "127.0.0.1:5401" /app/data/config.yaml 2>/dev/null || \
+       grep -q "127.0.0.1:5401" data/config.yaml 2>/dev/null; then
+        echo "✓ Config patched! Starting final instance..."
+        kill $PATCHER_PID 2>/dev/null || true
+        exec uv run python3 main.py
     fi
-    sleep 1
+    
+    attempt=$((attempt + 1))
+    sleep 3
 done
 
-# Step 2: 检查是否存在旧的配置文件，如果存在则先修改
-for config_path in "data/config.yaml" "/app/data/config.yaml"; do
-    if [ -f "$config_path" ]; then
-        echo "Found existing config: $config_path"
-        echo "Updating plugin runtime URL..."
-        sed -i 's|ws://langbot_plugin_runtime:5400/control/ws|ws://127.0.0.1:5401/control/ws|g' "$config_path"
-        sed -i 's|langbot_plugin_runtime:5400|127.0.0.1:5401|g' "$config_path"
-        echo "✓ Config updated"
-    fi
-done
-
-# Step 3: 启动 LangBot（配置会在首次运行时生成）
-echo ""
-echo "Starting LangBot..."
-uv run python3 main.py &
-LANGBOT_PID=$!
-
-# Step 4: 监控配置文件生成并立即修改
-echo "Monitoring for config file generation..."
-for i in {1..60}; do
-    for config_path in "data/config.yaml" "/app/data/config.yaml"; do
-        if [ -f "$config_path" ] && [ ! -f "${config_path}.modified" ]; then
-            echo "✓ New config detected: $config_path"
-            sleep 1  # 等待写入完成
-            
-            # 修改配置
-            sed -i 's|ws://langbot_plugin_runtime:5400/control/ws|ws://127.0.0.1:5401/control/ws|g' "$config_path"
-            sed -i 's|langbot_plugin_runtime:5400|127.0.0.1:5401|g' "$config_path"
-            
-            # 标记已修改
-            touch "${config_path}.modified"
-            
-            echo "Config modified, restarting LangBot..."
-            kill $LANGBOT_PID 2>/dev/null || true
-            sleep 2
-            
-            # 重新启动
-            exec uv run python3 main.py
-        fi
-    done
-    sleep 1
-done
-
-# 如果配置文件一直没生成，继续运行
-echo "Config monitoring timeout, continuing with current process..."
-wait $LANGBOT_PID
+echo "Failed to start properly, but continuing anyway..."
+exec uv run python3 main.py
